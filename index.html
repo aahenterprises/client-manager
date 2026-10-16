@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Client Manager | AAH Enterprises</title>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Poppins:wght@300;400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="loader">
+    <div class="loader-logo">AAH</div>
+    <p>Client Manager</p>
+    <div class="bar"><span></span></div>
+</div>
+
+<header>
+    <div class="logo">AAH Enterprises</div>
+    <button id="logoutBtn" class="ghost hidden" type="button">Log out</button>
+</header>
+
+<!-- Login -->
+<main id="loginView" class="hidden">
+    <section class="card login">
+        <h1>Client <span class="grad">Manager</span></h1>
+        <p class="sub">Log in to see your clients.</p>
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="username">
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password">
+        <p id="loginError" class="error"></p>
+        <button id="loginBtn" type="button">Log in</button>
+    </section>
+</main>
+
+<!-- App -->
+<main id="appView" class="hidden">
+    <h1>Your <span class="grad">Clients</span></h1>
+    <p class="sub" id="who"></p>
+
+    <div class="kpis">
+        <div class="kpi"><small>Total clients</small><b id="kTotal">0</b></div>
+        <div class="kpi"><small>Active</small><b id="kActive">0</b></div>
+        <div class="kpi"><small>Leads</small><b id="kLead">0</b></div>
+        <div class="kpi"><small>Total value</small><b id="kValue">0</b></div>
+    </div>
+
+    <section class="card">
+        <h2 id="formTitle">Add a client</h2>
+        <div class="form">
+            <div><label for="fName">Client name</label><input id="fName" type="text"></div>
+            <div><label for="fPhone">Phone / WhatsApp</label><input id="fPhone" type="text"></div>
+            <div><label for="fEmail">Email</label><input id="fEmail" type="email"></div>
+            <div><label for="fProject">Project</label><input id="fProject" type="text" placeholder="e.g. Business website"></div>
+            <div><label for="fStatus">Status</label>
+                <select id="fStatus"><option>Lead</option><option>Active</option><option>Completed</option></select>
+            </div>
+            <div><label for="fAmount">Amount (Rs)</label><input id="fAmount" type="number" min="0"></div>
+        </div>
+        <label for="fNotes" style="margin-top:14px">Notes</label>
+        <input id="fNotes" type="text" placeholder="Anything to remember">
+        <div class="actions">
+            <button id="saveBtn" type="button">Add client</button>
+            <button id="cancelBtn" class="ghost hidden" type="button">Cancel edit</button>
+        </div>
+    </section>
+
+    <section class="card">
+        <div class="row-top">
+            <h2>All clients</h2>
+            <select id="filter">
+                <option value="">All statuses</option><option>Lead</option><option>Active</option><option>Completed</option>
+            </select>
+        </div>
+        <input id="search" type="search" placeholder="Search by name, project, phone or email">
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Client</th><th>Project</th><th>Status</th><th class="r">Amount</th><th></th></tr></thead>
+                <tbody id="rows"></tbody>
+            </table>
+        </div>
+    </section>
+</main>
+
+<footer>&copy; 2026 AAH Enterprises &bull; Founder &amp; CEO: Muhammad Awais Raza</footer>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut }
+        from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+    import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, where, serverTimestamp }
+        from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+    const firebaseConfig = {
+        apiKey: "AIzaSyBIw2odkVTIViTpHQgLPJ4Ng349oeoB4II",
+        authDomain: "aah-client-manager.firebaseapp.com",
+        projectId: "aah-client-manager",
+        storageBucket: "aah-client-manager.firebasestorage.app",
+        messagingSenderId: "273200959455",
+        appId: "1:273200959455:web:668c280c847caa6da0be6a"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    const $ = id => document.getElementById(id);
+    const money = n => 'Rs ' + Math.round(n).toLocaleString();
+
+    let user = null;
+    let unsubscribe = null;
+    let clients = [];
+    let editId = null;
+
+    // ---------- Loader ----------
+    window.addEventListener('load', () => {
+        setTimeout(() => $('loader').classList.add('hide'), 1800);
+    });
+
+    // ---------- Login / logout ----------
+    $('loginBtn').addEventListener('click', login);
+    $('password').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+    $('logoutBtn').addEventListener('click', () => signOut(auth));
+
+    async function login() {
+        $('loginError').textContent = '';
+        try {
+            await signInWithEmailAndPassword(auth, $('email').value.trim(), $('password').value);
+            $('password').value = '';
+        } catch (e) {
+            $('loginError').textContent = 'Wrong email or password.';
+        }
+    }
+
+    onAuthStateChanged(auth, u => {
+        user = u;
+        if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+        if (u) {
+            $('loginView').classList.add('hidden');
+            $('appView').classList.remove('hidden');
+            $('logoutBtn').classList.remove('hidden');
+            $('who').textContent = 'Logged in as ' + u.email;
+            const q = query(collection(db, 'clients'), where('uid', '==', u.uid));
+            unsubscribe = onSnapshot(q, snap => {
+                clients = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                render();
+            }, err => {
+                alert('Could not load data. Check your Firestore rules. (' + err.code + ')');
+            });
+        } else {
+            clients = [];
+            $('appView').classList.add('hidden');
+            $('logoutBtn').classList.add('hidden');
+            $('loginView').classList.remove('hidden');
+        }
+    });
+
+    // ---------- Add / edit ----------
+    $('saveBtn').addEventListener('click', saveClient);
+    $('cancelBtn').addEventListener('click', resetForm);
+    $('search').addEventListener('input', render);
+    $('filter').addEventListener('change', render);
+
+    async function saveClient() {
+        const name = $('fName').value.trim();
+        if (!name) { alert('Please enter the client name.'); return; }
+        const data = {
+            name,
+            phone: $('fPhone').value.trim(),
+            email: $('fEmail').value.trim(),
+            project: $('fProject').value.trim(),
+            status: $('fStatus').value,
+            amount: Number($('fAmount').value) || 0,
+            notes: $('fNotes').value.trim()
+        };
+        try {
+            if (editId) {
+                await updateDoc(doc(db, 'clients', editId), data);
+            } else {
+                await addDoc(collection(db, 'clients'), { ...data, uid: user.uid, createdAt: serverTimestamp() });
+            }
+            resetForm();
+        } catch (e) {
+            alert('Could not save. (' + e.code + ')');
+        }
+    }
+
+    function startEdit(c) {
+        editId = c.id;
+        $('fName').value = c.name || '';
+        $('fPhone').value = c.phone || '';
+        $('fEmail').value = c.email || '';
+        $('fProject').value = c.project || '';
+        $('fStatus').value = c.status || 'Lead';
+        $('fAmount').value = c.amount || '';
+        $('fNotes').value = c.notes || '';
+        $('formTitle').textContent = 'Edit client';
+        $('saveBtn').textContent = 'Save changes';
+        $('cancelBtn').classList.remove('hidden');
+        $('fName').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function resetForm() {
+        editId = null;
+        ['fName','fPhone','fEmail','fProject','fAmount','fNotes'].forEach(id => $(id).value = '');
+        $('fStatus').value = 'Lead';
+        $('formTitle').textContent = 'Add a client';
+        $('saveBtn').textContent = 'Add client';
+        $('cancelBtn').classList.add('hidden');
+    }
+
+    async function removeClient(c) {
+        if (!confirm('Delete ' + c.name + '?')) return;
+        try { await deleteDoc(doc(db, 'clients', c.id)); }
+        catch (e) { alert('Could not delete. (' + e.code + ')'); }
+    }
+
+    // ---------- Draw ----------
+    function render() {
+        $('kTotal').textContent = clients.length;
+        $('kActive').textContent = clients.filter(c => c.status === 'Active').length;
+        $('kLead').textContent = clients.filter(c => c.status === 'Lead').length;
+        $('kValue').textContent = money(clients.reduce((s, c) => s + (c.amount || 0), 0));
+
+        const q = $('search').value.trim().toLowerCase();
+        const f = $('filter').value;
+        const list = clients
+            .filter(c => !f || c.status === f)
+            .filter(c => [c.name, c.project, c.phone, c.email].join(' ').toLowerCase().includes(q))
+            .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+        const body = $('rows');
+        body.innerHTML = '';
+
+        if (!list.length) {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = 5; td.className = 'empty';
+            td.textContent = clients.length ? 'No clients match your search.' : 'No clients yet. Add your first client above.';
+            tr.appendChild(td); body.appendChild(tr);
+            return;
+        }
+
+        list.forEach(c => {
+            const tr = document.createElement('tr');
+            tr.className = 'new';
+
+            const t1 = document.createElement('td');
+            const b = document.createElement('b'); b.textContent = c.name;
+            const s = document.createElement('small'); s.textContent = [c.phone, c.email].filter(Boolean).join(' \u2022 ');
+            t1.appendChild(b); t1.appendChild(s);
+
+            const t2 = document.createElement('td'); t2.textContent = c.project || '-';
+
+            const t3 = document.createElement('td');
+            const badge = document.createElement('span');
+            badge.className = 'badge ' + (c.status || '').toLowerCase();
+            badge.textContent = c.status;
+            t3.appendChild(badge);
+
+            const t4 = document.createElement('td'); t4.className = 'r'; t4.textContent = money(c.amount || 0);
+
+            const t5 = document.createElement('td'); t5.className = 'r';
+            const edit = document.createElement('button'); edit.className = 'small'; edit.textContent = 'Edit';
+            edit.addEventListener('click', () => startEdit(c));
+            const del = document.createElement('button'); del.className = 'small ghost'; del.textContent = 'Delete';
+            del.addEventListener('click', () => removeClient(c));
+            t5.appendChild(edit); t5.appendChild(del);
+
+            [t1, t2, t3, t4, t5].forEach(t => tr.appendChild(t));
+            body.appendChild(tr);
+        });
+    }
+</script>
+</body>
+</html>
